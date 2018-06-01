@@ -56,26 +56,30 @@ type Worker struct {
 func (w *Worker) start() {
 	// defer w.wg.Done()
 	go func() {
-		for {
+
+		for w.jobQueue != nil {
 			// Add my jobQueue to the worker pool.
+
 			w.workerPool <- w.jobQueue
-			fmt.Println("worker started")
 
 			select {
 			case job, ok := <-w.jobQueue:
 				if !ok {
+					// fmt.Println("nil job worker", w.id, job, len(w.jobQueue))
+					w.jobQueue = nil
 					w.wg.Done()
-					return
+					continue
 				}
+
 				// Dispatcher has added a job to my jobQueue.
-				fmt.Printf("worker%d: started %s\n", w.id, job.Name())
 				job.Execute()
-				fmt.Printf("worker%d: completed %s!\n", w.id, job.Name())
+
 			case <-w.quitChan:
 				// We have been asked to stop.
 				fmt.Printf("worker%d stopping\n", w.id)
 				return
 			}
+
 		}
 	}()
 }
@@ -134,18 +138,18 @@ func (d *Dispatcher) Run() {
 func (d *Dispatcher) dispatch() {
 	for {
 		select {
-		case job := <-d.jobQueue:
-			go func() {
-				d.l.Lock()
-				defer d.l.Unlock()
-				fmt.Printf("fetching workerJobQueue for: %s\n", job.Name())
-				workerJobQueue := <-d.workerPool
-				fmt.Printf("adding %s to workerJobQueue\n", job.Name())
-				workerJobQueue <- job
-			}()
+		case job, ok := <-d.jobQueue:
+			if !ok {
+				// fmt.Println("nil job dispatch", job, len(d.jobQueue))
+				d.jobQueue = nil
+				continue
+			}
+			workerJobQueue := <-d.workerPool
+			// fmt.Println("pushing to queue: ", workerJobQueue)
+			workerJobQueue <- job
 		case <-d.quitChan:
 			// We have been asked to stop.
-			fmt.Printf("dispatcher coming to halt\n")
+			// fmt.Printf("dispatcher coming to halt\n")
 			d.shutWorkers()
 			return
 		}
@@ -154,19 +158,17 @@ func (d *Dispatcher) dispatch() {
 
 func (d *Dispatcher) AddJob(job Job) {
 	d.jobQueue <- job
-	fmt.Println("pushed to queue")
 }
 
 func (d *Dispatcher) Stop() {
 	// No more Adding jobs to the jobqueue function
+	close(d.jobQueue)
 	d.quitChan <- true
 	d.wg.Wait()
-	close(d.jobQueue)
 }
 
 func (d *Dispatcher) shutWorkers() {
-	for id, worker := range d.workerMap {
-		fmt.Printf("stopping worker %d\n", id)
+	for _, worker := range d.workerMap {
 		worker.close()
 	}
 }
