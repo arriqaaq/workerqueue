@@ -67,7 +67,7 @@ func (w *Worker) start() {
 	}()
 }
 
-// Close ensured the channel is closed for sending, but waits for all messages to be consumed
+// Close ensures the channel is closed for sending, but waits for all messages to be consumed
 func (w *Worker) close() {
 	close(w.jobQueue)
 }
