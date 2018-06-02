@@ -40,7 +40,6 @@ func NewWorker(id int, workerPool chan chan Job, wg *sync.WaitGroup) *Worker {
 		id:         id,
 		jobQueue:   make(chan Job),
 		workerPool: workerPool,
-		quitChan:   make(chan bool),
 		wg:         wg,
 	}
 }
@@ -49,37 +48,21 @@ type Worker struct {
 	id         int
 	jobQueue   chan Job
 	workerPool chan chan Job
-	quitChan   chan bool
 	wg         *sync.WaitGroup
 }
 
 func (w *Worker) start() {
 	// defer w.wg.Done()
 	go func() {
+		defer func() {
+			w.wg.Done()
+		}()
 
-		for w.jobQueue != nil {
-			// Add my jobQueue to the worker pool.
+		w.workerPool <- w.jobQueue
 
+		for job := range w.jobQueue {
 			w.workerPool <- w.jobQueue
-
-			select {
-			case job, ok := <-w.jobQueue:
-				if !ok {
-					// fmt.Println("nil job worker", w.id, job, len(w.jobQueue))
-					w.jobQueue = nil
-					w.wg.Done()
-					continue
-				}
-
-				// Dispatcher has added a job to my jobQueue.
-				job.Execute()
-
-			case <-w.quitChan:
-				// We have been asked to stop.
-				fmt.Printf("worker%d stopping\n", w.id)
-				return
-			}
-
+			job.Execute()
 		}
 	}()
 }
@@ -87,13 +70,6 @@ func (w *Worker) start() {
 // Close ensured the channel is closed for sending, but waits for all messages to be consumed
 func (w *Worker) close() {
 	close(w.jobQueue)
-}
-
-// Don't call stop, unless explicitly needed, else queued job will fail
-func (w *Worker) stop() {
-	go func() {
-		w.quitChan <- true
-	}()
 }
 
 // NewDispatcher creates, and returns a new Dispatcher object.
@@ -106,9 +82,8 @@ func NewDispatcher(name string, maxWorkers int) *Dispatcher {
 		jobQueue:   jobQueue,
 		maxWorkers: maxWorkers,
 		workerPool: workerPool,
-		quitChan:   make(chan bool),
 		wg:         &sync.WaitGroup{},
-		workerMap:  make(map[int]*Worker),
+		doneCh:     make(chan bool),
 	}
 }
 
@@ -117,10 +92,8 @@ type Dispatcher struct {
 	workerPool chan chan Job
 	maxWorkers int
 	jobQueue   chan Job
-	workerMap  map[int]*Worker
-	quitChan   chan bool
 	wg         *sync.WaitGroup
-	l          sync.Mutex
+	doneCh     chan bool
 }
 
 func (d *Dispatcher) Run() {
@@ -129,31 +102,30 @@ func (d *Dispatcher) Run() {
 		d.wg.Add(1)
 		worker := NewWorker(id, d.workerPool, d.wg)
 		worker.start()
-		d.workerMap[id] = worker
 	}
-
 	go d.dispatch()
 }
 
 func (d *Dispatcher) dispatch() {
+	for job := range d.jobQueue {
+		workerJobQueue := <-d.workerPool
+		workerJobQueue <- job
+	}
+	// close(d.workerPool)
+	// for i := 0; i < d.maxWorkers; i++ {
 	for {
 		select {
-		case job, ok := <-d.jobQueue:
-			if !ok {
-				// fmt.Println("nil job dispatch", job, len(d.jobQueue))
-				d.jobQueue = nil
-				continue
+		case worker, ok := <-d.workerPool:
+			if ok {
+				close(worker)
+			} else {
+				d.doneCh <- true
+				return
 			}
-			workerJobQueue := <-d.workerPool
-			// fmt.Println("pushing to queue: ", workerJobQueue)
-			workerJobQueue <- job
-		case <-d.quitChan:
-			// We have been asked to stop.
-			// fmt.Printf("dispatcher coming to halt\n")
-			d.shutWorkers()
-			return
+
 		}
 	}
+
 }
 
 func (d *Dispatcher) AddJob(job Job) {
@@ -163,12 +135,8 @@ func (d *Dispatcher) AddJob(job Job) {
 func (d *Dispatcher) Stop() {
 	// No more Adding jobs to the jobqueue function
 	close(d.jobQueue)
-	d.quitChan <- true
 	d.wg.Wait()
-}
-
-func (d *Dispatcher) shutWorkers() {
-	for _, worker := range d.workerMap {
-		worker.close()
-	}
+	fmt.Println("initiate closing pool")
+	close(d.workerPool)
+	<-d.doneCh
 }
