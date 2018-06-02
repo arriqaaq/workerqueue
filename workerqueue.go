@@ -111,8 +111,7 @@ func (d *Dispatcher) dispatch() {
 		workerJobQueue := <-d.workerPool
 		workerJobQueue <- job
 	}
-	// close(d.workerPool)
-	// for i := 0; i < d.maxWorkers; i++ {
+
 	for {
 		select {
 		case worker, ok := <-d.workerPool:
