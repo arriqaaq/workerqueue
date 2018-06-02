@@ -136,7 +136,6 @@ func (d *Dispatcher) Stop() {
 	// No more Adding jobs to the jobqueue function
 	close(d.jobQueue)
 	d.wg.Wait()
-	fmt.Println("initiate closing pool")
 	close(d.workerPool)
 	<-d.doneCh
 }
